@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Discord Clone Test</title>
+</head>
+<body>
+    <h1>Discord Clone Server Test</h1>
+    <div id="status"></div>
+    <div id="results"></div>
+    
+    <script>
+        const status = document.getElementById('status');
+        const results = document.getElementById('results');
+        
+        async function testServer() {
+            status.innerHTML = 'Testing server...';
+            
+            try {
+                // Test 1: Register a user
+                const registerResponse = await fetch('/api/auth/register', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        username: 'testuser',
+                        email: 'test@example.com',
+                        password: 'password123'
+                    })
+                });
+                const registerData = await registerResponse.json();
+                results.innerHTML += '<p>✅ User registration: ' + (registerData.success ? 'SUCCESS' : 'FAILED') + '</p>';
+                
+                if (registerData.success) {
+                    const token = registerData.token;
+                    
+                    // Test 2: Create a server
+                    const serverResponse = await fetch('/api/servers', {
+                        method: 'POST',
+                        headers: { 
+                            'Content-Type': 'application/json',
+                            'Authorization': token
+                        },
+                        body: JSON.stringify({
+                            name: 'Test Server',
+                            description: 'A test server'
+                        })
+                    });
+                    const serverData = await serverResponse.json();
+                    results.innerHTML += '<p>✅ Server creation: ' + (serverData.id ? 'SUCCESS' : 'FAILED') + '</p>';
+                    
+                    if (serverData.id) {
+                        // Test 3: Create a channel
+                        const channelResponse = await fetch(`/api/servers/${serverData.id}/channels`, {
+                            method: 'POST',
+                            headers: { 
+                                'Content-Type': 'application/json',
+                                'Authorization': token
+                            },
+                            body: JSON.stringify({
+                                name: 'test-channel',
+                                type: 'text'
+                            })
+                        });
+                        const channelData = await channelResponse.json();
+                        results.innerHTML += '<p>✅ Channel creation: ' + (channelData.id ? 'SUCCESS' : 'FAILED') + '</p>';
+                        
+                        if (channelData.id) {
+                            // Test 4: Send a message
+                            const messageResponse = await fetch(`/api/channels/${channelData.id}/messages`, {
+                                method: 'POST',
+                                headers: { 
+                                    'Content-Type': 'application/json',
+                                    'Authorization': token
+                                },
+                                body: JSON.stringify({
+                                    content: 'Hello, World!',
+                                    type: 'text'
+                                })
+                            });
+                            const messageData = await messageResponse.json();
+                            results.innerHTML += '<p>✅ Message sending: ' + (messageData.id ? 'SUCCESS' : 'FAILED') + '</p>';
+                        }
+                    }
+                    
+                    // Test 5: WebSocket connection
+                    const ws = new WebSocket(`ws://localhost:8080/api/ws?user_id=${token}`);
+                    ws.onopen = () => {
+                        results.innerHTML += '<p>✅ WebSocket connection: SUCCESS</p>';
+                        ws.close();
+                    };
+                    ws.onerror = () => {
+                        results.innerHTML += '<p>❌ WebSocket connection: FAILED</p>';
+                    };
+                    
+                    // Test 6: Online users
+                    const onlineResponse = await fetch('/api/online-users', {
+                        headers: { 'Authorization': token }
+                    });
+                    const onlineData = await onlineResponse.json();
+                    results.innerHTML += '<p>✅ Online users endpoint: ' + (Array.isArray(onlineData) ? 'SUCCESS' : 'FAILED') + '</p>';
+                }
+                
+                status.innerHTML = 'Tests completed!';
+                
+            } catch (error) {
+                results.innerHTML += '<p>❌ Error: ' + error.message + '</p>';
+                status.innerHTML = 'Tests failed!';
+            }
+        }
+        
+        // Run tests when page loads
+        testServer();
+    </script>
+</body>
+</html>

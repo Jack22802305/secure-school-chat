@@ -1,0 +1,606 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Discord Clone - P2P Messaging Platform</title>
+    <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
+    <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <style>
+        .discord-bg { background-color: #36393f; }
+        .discord-sidebar { background-color: #2f3136; }
+        .discord-channel-list { background-color: #2f3136; }
+        .discord-chat { background-color: #36393f; }
+        .discord-message { background-color: #40444b; }
+        .discord-input { background-color: #40444b; }
+        .discord-server { background-color: #5865f2; }
+        .discord-text { color: #dcddde; }
+        .discord-muted { color: #8e9297; }
+        .discord-online { color: #3ba55d; }
+        .discord-hover:hover { background-color: #34373c; }
+        
+        .scrollbar-thin::-webkit-scrollbar { width: 8px; }
+        .scrollbar-thin::-webkit-scrollbar-track { background: #2f3136; }
+        .scrollbar-thin::-webkit-scrollbar-thumb { background: #202225; border-radius: 4px; }
+        .scrollbar-thin::-webkit-scrollbar-thumb:hover { background: #1a1c1f; }
+    </style>
+</head>
+<body class="discord-bg">
+    <div id="app"></div>
+
+    <script>
+        const { createApp, ref, reactive, onMounted, onUnmounted } = Vue;
+
+        const App = {
+            setup() {
+                // Auto-detect server URL
+                const getServerUrl = () => {
+                    const protocol = window.location.protocol === 'https:' ? 'https:' : 'http:';
+                    const host = window.location.host;
+                    return `${protocol}//${host}`;
+                };
+
+                const getWebSocketUrl = () => {
+                    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+                    const host = window.location.host;
+                    return `${protocol}//${host}`;
+                };
+
+                const SERVER_URL = getServerUrl();
+                const WS_URL = getWebSocketUrl();
+
+                // State
+                const user = ref(null);
+                const servers = ref([]);
+                const currentServer = ref(null);
+                const currentChannel = ref(null);
+                const channels = ref([]);
+                const messages = ref([]);
+                const onlineUsers = ref([]);
+                const messageInput = ref('');
+                const showLogin = ref(true);
+                const connectionStatus = ref('disconnected');
+                const loginForm = reactive({
+                    username: '',
+                    email: '',
+                    password: '',
+                    isRegister: false
+                });
+
+                // WebSocket connection
+                let socket = null;
+
+                // API calls with proper error handling
+                const api = {
+                    async post(url, data) {
+                        try {
+                            const response = await fetch(`${SERVER_URL}/api${url}`, {
+                                method: 'POST',
+                                headers: {
+                                    'Content-Type': 'application/json',
+                                    'Authorization': user.value?.id || ''
+                                },
+                                body: JSON.stringify(data)
+                            });
+                            
+                            if (!response.ok) {
+                                throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                            }
+                            
+                            return await response.json();
+                        } catch (error) {
+                            console.error('API POST error:', error);
+                            throw error;
+                        }
+                    },
+                    
+                    async get(url) {
+                        try {
+                            const response = await fetch(`${SERVER_URL}/api${url}`, {
+                                headers: {
+                                    'Authorization': user.value?.id || ''
+                                }
+                            });
+                            
+                            if (!response.ok) {
+                                throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                            }
+                            
+                            return await response.json();
+                        } catch (error) {
+                            console.error('API GET error:', error);
+                            throw error;
+                        }
+                    }
+                };
+
+                // Authentication
+                const login = async () => {
+                    try {
+                        const endpoint = loginForm.isRegister ? '/auth/register' : '/auth/login';
+                        const result = await api.post(endpoint, loginForm);
+                        
+                        if (result.success) {
+                            user.value = result.user;
+                            showLogin.value = false;
+                            await loadServers();
+                            connectWebSocket();
+                            console.log('✅ Login successful:', result.user.username);
+                        } else {
+                            alert(result.message || 'Authentication failed');
+                        }
+                    } catch (error) {
+                        console.error('Auth error:', error);
+                        alert('Authentication failed: ' + error.message);
+                    }
+                };
+
+                const logout = () => {
+                    user.value = null;
+                    showLogin.value = true;
+                    connectionStatus.value = 'disconnected';
+                    if (socket) {
+                        socket.close();
+                    }
+                };
+
+                // WebSocket connection with auto-reconnect
+                const connectWebSocket = () => {
+                    if (!user.value) return;
+
+                    const wsUrl = `${WS_URL}/api/ws?user_id=${user.value.id}`;
+                    console.log('Connecting to WebSocket:', wsUrl);
+                    
+                    socket = new WebSocket(wsUrl);
+                    
+                    socket.onopen = () => {
+                        console.log('✅ WebSocket connected');
+                        connectionStatus.value = 'connected';
+                    };
+                    
+                    socket.onmessage = (event) => {
+                        try {
+                            const data = JSON.parse(event.data);
+                            console.log('📨 WebSocket message:', data);
+                            
+                            switch (data.type) {
+                                case 'new_message':
+                                    if (data.data.channel_id === currentChannel.value?.id) {
+                                        messages.value.push(data.data);
+                                        scrollToBottom();
+                                    }
+                                    break;
+                                case 'user_joined':
+                                    console.log('👋 User joined:', data.data.username);
+                                    loadOnlineUsers();
+                                    break;
+                                case 'user_left':
+                                    console.log('👋 User left:', data.data.username);
+                                    loadOnlineUsers();
+                                    break;
+                            }
+                        } catch (error) {
+                            console.error('Error parsing WebSocket message:', error);
+                        }
+                    };
+                    
+                    socket.onclose = (event) => {
+                        console.log('❌ WebSocket disconnected:', event.code);
+                        connectionStatus.value = 'disconnected';
+                        
+                        // Auto-reconnect after 3 seconds if user is still logged in
+                        if (user.value && !showLogin.value) {
+                            setTimeout(() => {
+                                console.log('🔄 Attempting to reconnect...');
+                                connectWebSocket();
+                            }, 3000);
+                        }
+                    };
+                    
+                    socket.onerror = (error) => {
+                        console.error('❌ WebSocket error:', error);
+                        connectionStatus.value = 'error';
+                    };
+                };
+
+                // Online users management
+                const loadOnlineUsers = async () => {
+                    try {
+                        onlineUsers.value = await api.get('/online-users');
+                    } catch (error) {
+                        console.error('Failed to load online users:', error);
+                    }
+                };
+
+                // Server management
+                const loadServers = async () => {
+                    try {
+                        servers.value = await api.get('/servers');
+                        if (servers.value.length > 0) {
+                            selectServer(servers.value[0]);
+                        }
+                        await loadOnlineUsers();
+                    } catch (error) {
+                        console.error('Failed to load servers:', error);
+                    }
+                };
+
+                const createServer = async () => {
+                    const name = prompt('Server name:');
+                    if (!name) return;
+                    
+                    try {
+                        const server = await api.post('/servers', { 
+                            name,
+                            description: `${name} server` 
+                        });
+                        servers.value.push(server);
+                        selectServer(server);
+                        console.log('✅ Server created:', server.name);
+                    } catch (error) {
+                        console.error('Failed to create server:', error);
+                        alert('Failed to create server: ' + error.message);
+                    }
+                };
+
+                const selectServer = async (server) => {
+                    currentServer.value = server;
+                    await loadChannels(server.id);
+                };
+
+                // Channel management
+                const loadChannels = async (serverId) => {
+                    try {
+                        channels.value = await api.get(`/servers/${serverId}/channels`);
+                        if (channels.value.length > 0) {
+                            selectChannel(channels.value[0]);
+                        }
+                    } catch (error) {
+                        console.error('Failed to load channels:', error);
+                    }
+                };
+
+                const createChannel = async () => {
+                    if (!currentServer.value) return;
+                    
+                    const name = prompt('Channel name:');
+                    if (!name) return;
+                    
+                    const type = confirm('Voice channel? (OK = Voice, Cancel = Text)') ? 'voice' : 'text';
+                    
+                    try {
+                        const channel = await api.post(`/servers/${currentServer.value.id}/channels`, {
+                            name,
+                            type
+                        });
+                        channels.value.push(channel);
+                        console.log('✅ Channel created:', channel.name);
+                    } catch (error) {
+                        console.error('Failed to create channel:', error);
+                        alert('Failed to create channel: ' + error.message);
+                    }
+                };
+
+                const selectChannel = async (channel) => {
+                    currentChannel.value = channel;
+                    await loadMessages(channel.id);
+                    
+                    if (socket && socket.readyState === WebSocket.OPEN) {
+                        socket.send(JSON.stringify({
+                            type: 'join_channel',
+                            data: { channel_id: channel.id }
+                        }));
+                    }
+                };
+
+                // Message management
+                const loadMessages = async (channelId) => {
+                    try {
+                        messages.value = await api.get(`/channels/${channelId}/messages`);
+                        scrollToBottom();
+                    } catch (error) {
+                        console.error('Failed to load messages:', error);
+                    }
+                };
+
+                const sendMessage = async () => {
+                    if (!messageInput.value.trim() || !currentChannel.value) return;
+                    
+                    try {
+                        await api.post(`/channels/${currentChannel.value.id}/messages`, {
+                            content: messageInput.value,
+                            type: 'text'
+                        });
+                        messageInput.value = '';
+                        console.log('✅ Message sent');
+                    } catch (error) {
+                        console.error('Failed to send message:', error);
+                        alert('Failed to send message: ' + error.message);
+                    }
+                };
+
+                const scrollToBottom = () => {
+                    setTimeout(() => {
+                        const chatContainer = document.getElementById('chat-messages');
+                        if (chatContainer) {
+                            chatContainer.scrollTop = chatContainer.scrollHeight;
+                        }
+                    }, 100);
+                };
+
+                // Voice/Video calls (simplified)
+                const startVoiceCall = async () => {
+                    if (!currentChannel.value || currentChannel.value.type !== 'voice') return;
+                    alert(`🎤 Voice call started in ${currentChannel.value.name}!\n\n(This is a demo version. Full P2P WebRTC calls will be implemented in the complete version.)`);
+                };
+
+                const startVideoCall = async () => {
+                    if (!currentChannel.value || currentChannel.value.type !== 'voice') return;
+                    alert(`📹 Video call started in ${currentChannel.value.name}!\n\n(This is a demo version. Full P2P WebRTC calls will be implemented in the complete version.)`);
+                };
+
+                // Utility functions
+                const formatTime = (timestamp) => {
+                    return new Date(timestamp).toLocaleTimeString();
+                };
+
+                const getChannelIcon = (type) => {
+                    return type === 'voice' ? 'fas fa-volume-up' : 'fas fa-hashtag';
+                };
+
+                const getConnectionStatusColor = () => {
+                    switch (connectionStatus.value) {
+                        case 'connected': return 'text-green-400';
+                        case 'disconnected': return 'text-red-400';
+                        case 'error': return 'text-yellow-400';
+                        default: return 'text-gray-400';
+                    }
+                };
+
+                const getConnectionStatusText = () => {
+                    switch (connectionStatus.value) {
+                        case 'connected': return 'Connected';
+                        case 'disconnected': return 'Disconnected';
+                        case 'error': return 'Connection Error';
+                        default: return 'Unknown';
+                    }
+                };
+
+                // Lifecycle
+                onMounted(() => {
+                    console.log('🚀 Discord Clone initialized');
+                    console.log('🌐 Server URL:', SERVER_URL);
+                    console.log('🔌 WebSocket URL:', WS_URL);
+                });
+
+                onUnmounted(() => {
+                    if (socket) {
+                        socket.close();
+                    }
+                });
+
+                return {
+                    // State
+                    user, servers, currentServer, currentChannel, channels, messages, 
+                    onlineUsers, messageInput, showLogin, connectionStatus, loginForm,
+                    
+                    // Methods
+                    login, logout, loadOnlineUsers, loadServers, createServer, selectServer,
+                    loadChannels, createChannel, selectChannel, sendMessage, startVoiceCall, 
+                    startVideoCall, formatTime, getChannelIcon, getConnectionStatusColor,
+                    getConnectionStatusText, SERVER_URL
+                };
+            },
+
+            template: `
+                <!-- Login Screen -->
+                <div v-if="showLogin" class="min-h-screen flex items-center justify-center">
+                    <div class="discord-message p-8 rounded-lg w-96">
+                        <div class="text-center mb-6">
+                            <h1 class="text-3xl font-bold discord-text mb-2">Discord Clone</h1>
+                            <p class="discord-muted">P2P Messaging Platform</p>
+                            <p class="text-xs discord-muted mt-2">Server: {{ SERVER_URL }}</p>
+                        </div>
+                        
+                        <h2 class="text-xl font-bold discord-text mb-6 text-center">
+                            {{ loginForm.isRegister ? 'Create Account' : 'Welcome Back' }}
+                        </h2>
+                        
+                        <form @submit.prevent="login" class="space-y-4">
+                            <div>
+                                <label class="block discord-text text-sm font-medium mb-2">Username</label>
+                                <input v-model="loginForm.username" type="text" required
+                                       class="w-full p-3 discord-input rounded discord-text border-0">
+                            </div>
+                            
+                            <div v-if="loginForm.isRegister">
+                                <label class="block discord-text text-sm font-medium mb-2">Email</label>
+                                <input v-model="loginForm.email" type="email" required
+                                       class="w-full p-3 discord-input rounded discord-text border-0">
+                            </div>
+                            
+                            <div>
+                                <label class="block discord-text text-sm font-medium mb-2">Password</label>
+                                <input v-model="loginForm.password" type="password" required
+                                       class="w-full p-3 discord-input rounded discord-text border-0">
+                            </div>
+                            
+                            <button type="submit" class="w-full discord-server text-white p-3 rounded font-medium hover:opacity-90">
+                                {{ loginForm.isRegister ? 'Register' : 'Login' }}
+                            </button>
+                        </form>
+                        
+                        <p class="discord-muted text-center mt-4 text-sm">
+                            {{ loginForm.isRegister ? 'Already have an account?' : 'Need an account?' }}
+                            <button @click="loginForm.isRegister = !loginForm.isRegister" 
+                                    class="text-blue-400 hover:underline ml-1">
+                                {{ loginForm.isRegister ? 'Login' : 'Register' }}
+                            </button>
+                        </p>
+                    </div>
+                </div>
+
+                <!-- Main App -->
+                <div v-else class="flex h-screen">
+                    <!-- Server List -->
+                    <div class="w-16 discord-sidebar flex flex-col items-center py-3 space-y-2">
+                        <div v-for="server in servers" :key="server.id"
+                             @click="selectServer(server)"
+                             :class="['w-12 h-12 rounded-full flex items-center justify-center cursor-pointer text-white font-bold text-sm hover:opacity-80', 
+                                     currentServer?.id === server.id ? 'discord-server' : 'discord-message discord-hover']"
+                             :title="server.name">
+                            {{ server.name.charAt(0).toUpperCase() }}
+                        </div>
+                        
+                        <button @click="createServer" 
+                                class="w-12 h-12 rounded-full discord-message discord-hover flex items-center justify-center text-green-400 hover:text-green-300"
+                                title="Create Server">
+                            <i class="fas fa-plus"></i>
+                        </button>
+                    </div>
+
+                    <!-- Channel List -->
+                    <div class="w-60 discord-channel-list flex flex-col">
+                        <div class="p-4 border-b border-gray-600">
+                            <h3 class="discord-text font-bold">{{ currentServer?.name || 'Select Server' }}</h3>
+                            <div class="flex items-center mt-2">
+                                <div :class="['w-2 h-2 rounded-full mr-2', getConnectionStatusColor()]"></div>
+                                <span class="text-xs discord-muted">{{ getConnectionStatusText() }}</span>
+                            </div>
+                        </div>
+                        
+                        <div class="flex-1 p-2 overflow-y-auto scrollbar-thin">
+                            <div class="mb-4">
+                                <div class="flex items-center justify-between mb-2">
+                                    <h4 class="discord-muted text-xs font-semibold uppercase">Text Channels</h4>
+                                    <button @click="createChannel" class="discord-muted hover:discord-text" title="Create Channel">
+                                        <i class="fas fa-plus text-xs"></i>
+                                    </button>
+                                </div>
+                                
+                                <div v-for="channel in channels.filter(c => c.type === 'text')" :key="channel.id"
+                                     @click="selectChannel(channel)"
+                                     :class="['flex items-center p-2 rounded cursor-pointer hover:opacity-80', 
+                                             currentChannel?.id === channel.id ? 'discord-message' : 'discord-hover']">
+                                    <i :class="getChannelIcon(channel.type)" class="discord-muted mr-2 text-sm"></i>
+                                    <span class="discord-text text-sm">{{ channel.name }}</span>
+                                </div>
+                            </div>
+                            
+                            <div>
+                                <div class="flex items-center justify-between mb-2">
+                                    <h4 class="discord-muted text-xs font-semibold uppercase">Voice Channels</h4>
+                                </div>
+                                
+                                <div v-for="channel in channels.filter(c => c.type === 'voice')" :key="channel.id"
+                                     @click="selectChannel(channel)"
+                                     :class="['flex items-center p-2 rounded cursor-pointer hover:opacity-80', 
+                                             currentChannel?.id === channel.id ? 'discord-message' : 'discord-hover']">
+                                    <i :class="getChannelIcon(channel.type)" class="discord-muted mr-2 text-sm"></i>
+                                    <span class="discord-text text-sm">{{ channel.name }}</span>
+                                    <div class="ml-auto flex space-x-1">
+                                        <button @click.stop="startVoiceCall" class="discord-muted hover:discord-text" title="Join Voice">
+                                            <i class="fas fa-phone text-xs"></i>
+                                        </button>
+                                        <button @click.stop="startVideoCall" class="discord-muted hover:discord-text" title="Join Video">
+                                            <i class="fas fa-video text-xs"></i>
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <!-- User Info -->
+                        <div class="p-3 border-t border-gray-600 flex items-center">
+                            <div class="w-8 h-8 rounded-full discord-server flex items-center justify-center text-white text-sm font-bold mr-2">
+                                {{ user?.username?.charAt(0).toUpperCase() }}
+                            </div>
+                            <div class="flex-1">
+                                <div class="discord-text text-sm font-medium">{{ user?.username }}</div>
+                                <div class="discord-online text-xs">Online</div>
+                            </div>
+                            <button @click="logout" class="discord-muted hover:discord-text" title="Logout">
+                                <i class="fas fa-sign-out-alt"></i>
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- Chat Area -->
+                    <div class="flex-1 flex flex-col">
+                        <!-- Chat Header -->
+                        <div class="p-4 border-b border-gray-600 flex items-center">
+                            <i :class="getChannelIcon(currentChannel?.type)" class="discord-muted mr-2"></i>
+                            <h3 class="discord-text font-bold">{{ currentChannel?.name || 'Select Channel' }}</h3>
+                            <div class="ml-auto flex items-center space-x-3">
+                                <button v-if="currentChannel?.type === 'voice'" @click="startVoiceCall" 
+                                        class="discord-muted hover:discord-text" title="Start Voice Call">
+                                    <i class="fas fa-phone"></i>
+                                </button>
+                                <button v-if="currentChannel?.type === 'voice'" @click="startVideoCall" 
+                                        class="discord-muted hover:discord-text" title="Start Video Call">
+                                    <i class="fas fa-video"></i>
+                                </button>
+                            </div>
+                        </div>
+
+                        <!-- Messages -->
+                        <div id="chat-messages" class="flex-1 p-4 overflow-y-auto scrollbar-thin">
+                            <div v-if="messages.length === 0" class="text-center discord-muted py-8">
+                                <i class="fas fa-comments text-4xl mb-4"></i>
+                                <p>No messages yet. Start the conversation!</p>
+                            </div>
+                            
+                            <div v-for="message in messages" :key="message.id" class="mb-4 flex hover:bg-gray-800 hover:bg-opacity-30 p-2 rounded">
+                                <div class="w-10 h-10 rounded-full discord-server flex items-center justify-center text-white text-sm font-bold mr-3 flex-shrink-0">
+                                    {{ message.user?.username?.charAt(0).toUpperCase() || 'U' }}
+                                </div>
+                                <div class="flex-1">
+                                    <div class="flex items-baseline mb-1">
+                                        <span class="discord-text font-medium mr-2">{{ message.user?.username || 'Unknown' }}</span>
+                                        <span class="discord-muted text-xs">{{ formatTime(message.created_at) }}</span>
+                                    </div>
+                                    <div class="discord-text">{{ message.content }}</div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Message Input -->
+                        <div class="p-4">
+                            <form @submit.prevent="sendMessage" class="flex">
+                                <input v-model="messageInput" 
+                                       :placeholder="'Message #' + (currentChannel?.name || 'channel')"
+                                       :disabled="connectionStatus !== 'connected'"
+                                       class="flex-1 p-3 discord-input rounded-l discord-text border-0 disabled:opacity-50">
+                                <button type="submit" 
+                                        :disabled="connectionStatus !== 'connected' || !messageInput.trim()"
+                                        class="px-4 discord-server text-white rounded-r hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed">
+                                    <i class="fas fa-paper-plane"></i>
+                                </button>
+                            </form>
+                        </div>
+                    </div>
+
+                    <!-- User List -->
+                    <div class="w-60 discord-sidebar p-4">
+                        <h4 class="discord-muted text-xs font-semibold uppercase mb-3">Online — {{ onlineUsers.length }}</h4>
+                        <div v-for="onlineUser in onlineUsers" :key="onlineUser.id" class="flex items-center mb-2 p-2 rounded discord-hover">
+                            <div class="w-8 h-8 rounded-full discord-server flex items-center justify-center text-white text-sm font-bold mr-2">
+                                {{ onlineUser.username.charAt(0).toUpperCase() }}
+                            </div>
+                            <span class="discord-text text-sm">{{ onlineUser.username }}</span>
+                            <div class="ml-auto w-2 h-2 rounded-full bg-green-400" title="Online"></div>
+                        </div>
+                        <div v-if="onlineUsers.length === 0" class="discord-muted text-sm text-center py-4">
+                            <i class="fas fa-user-slash text-2xl mb-2"></i>
+                            <p>No users online</p>
+                        </div>
+                    </div>
+                </div>
+            `
+        };
+
+        createApp(App).mount('#app');
+    </script>
+</body>
+</html>

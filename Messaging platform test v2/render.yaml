@@ -1,0 +1,11 @@
+services:
+  - type: web
+    name: discord-clone
+    env: go
+    buildCommand: go build -o discord-server main.go
+    startCommand: ./discord-server
+    plan: free
+    autoDeploy: true
+    envVars:
+      - key: PORT
+        value: 8080
