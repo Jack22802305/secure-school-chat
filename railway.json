@@ -1,14 +1,12 @@
 {
   "$schema": "https://railway.app/railway.schema.json",
   "build": {
-    "builder": "NIXPACKS",
-    "buildCommand": "cd 'Messaging platform test v2' && go mod tidy && go build -o ../school-chat school_secure_server.go"
+    "builder": "NIXPACKS"
   },
   "deploy": {
-    "startCommand": "./school-chat",
+    "startCommand": "go run main.go",
     "healthcheckPath": "/",
     "healthcheckTimeout": 100,
-    "restartPolicyType": "ON_FAILURE",
-    "restartPolicyMaxRetries": 10
+    "restartPolicyType": "ON_FAILURE"
   }
 }
