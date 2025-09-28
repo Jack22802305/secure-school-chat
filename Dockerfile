@@ -2,14 +2,12 @@ FROM golang:1.21-alpine AS builder
 
 WORKDIR /app
 
-# Copy go.mod first
+# Copy go.mod and main.go
 COPY go.mod ./
-
-# Download dependencies (this will create go.sum)
-RUN go mod download
-
-# Copy source code
 COPY main.go ./
+
+# Download dependencies and create go.sum
+RUN go mod tidy
 
 # Build the application
 RUN go build -o school-chat main.go
