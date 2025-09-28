@@ -1,0 +1,12 @@
+[phases.build]
+cmds = [
+  "cd 'Messaging platform test v2'",
+  "go mod tidy",
+  "go build -o ../school-chat school_secure_server.go"
+]
+
+[phases.start]
+cmd = "./school-chat"
+
+[variables]
+PORT = "8080"
