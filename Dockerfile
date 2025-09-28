@@ -2,8 +2,8 @@ FROM golang:1.21-alpine AS builder
 
 WORKDIR /app
 
-# Copy the subdirectory contents
-COPY "Messaging platform test v2/" ./
+# Copy the subdirectory contents (handle spaces in folder name)
+COPY ["Messaging platform test v2/", "./"]
 
 # Download dependencies
 RUN go mod tidy

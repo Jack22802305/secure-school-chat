@@ -2,7 +2,7 @@
   "$schema": "https://railway.app/railway.schema.json",
   "build": {
     "builder": "NIXPACKS",
-    "buildCommand": "cd 'Messaging platform test v2' && go build -o ../school-chat school_secure_server.go"
+    "buildCommand": "cd 'Messaging platform test v2' && go mod tidy && go build -o ../school-chat school_secure_server.go"
   },
   "deploy": {
     "startCommand": "./school-chat",

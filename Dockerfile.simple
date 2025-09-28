@@ -1,0 +1,22 @@
+FROM golang:1.21-alpine AS builder
+
+WORKDIR /app
+
+# Copy everything
+COPY . .
+
+# Navigate to the subdirectory and build
+WORKDIR /app/Messaging\ platform\ test\ v2
+RUN go mod tidy
+RUN go build -o ../school-chat school_secure_server.go
+
+FROM alpine:latest
+RUN apk --no-cache add ca-certificates tzdata
+WORKDIR /root/
+
+# Copy the built binary
+COPY --from=builder /app/school-chat .
+
+EXPOSE 8080
+
+CMD ["./school-chat"]
